@@ -1,0 +1,81 @@
+# 文件位置: .github/workflows/sync_worker_code.yml
+name: 同步上游 Worker 代码 (Zip 解压优化版)
+
+on:
+  schedule:
+    - cron: '0 2 * * 1'   # 每周一02:00 UTC运行一次
+  workflow_dispatch:      # 允许手动触发
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout 仓库
+        uses: actions/checkout@v4
+
+      # 步骤 1: 获取版本信息并判断是否需要更新
+      - name: 检查版本并获取最新版本
+        id: check_versions
+        run: |
+          # 1. 获取最新正式版标签
+          LATEST_TAG=$(curl -s https://api.github.com/repos/bia-pain-bache/BPB-Worker-Panel/releases/latest | jq -r '.tag_name')
+          
+          if [ -z "$LATEST_TAG" ]; then
+            echo "::error::未找到最新正式发布版本，退出。"
+            exit 1
+          fi
+          
+          # 2. 获取本地版本
+          if [ -f "version.txt" ]; then
+            CURRENT_VERSION=$(cat version.txt | tr -d '\n' | tr -d '\r')
+          else
+            CURRENT_VERSION=""
+          fi
+          
+          echo "最新版本: $LATEST_TAG"
+          echo "当前本地版本: ${CURRENT_VERSION:-未找到}"
+          
+          # 3. 比较版本，设置是否需要更新
+          if [ "$CURRENT_VERSION" = "$LATEST_TAG" ]; then
+            echo "No update needed."
+            echo "need_update=false" >> $GITHUB_ENV
+          else
+            echo "Update needed. New tag: $LATEST_TAG"
+            echo "latest_tag=$LATEST_TAG" >> $GITHUB_ENV
+            echo "need_update=true" >> $GITHUB_ENV
+            echo "download_url=https://github.com/bia-pain-bache/BPB-Worker-Panel/releases/download/$LATEST_TAG/worker.zip" >> $GITHUB_ENV
+          fi
+
+      # 步骤 2: 下载、解压文件并更新版本号 (仅在需要更新时执行)
+      # 优化：不再手动安装 unzip，ubuntu-latest 默认包含了大多数常用工具
+      - name: 下载并解压 worker.zip
+        if: env.need_update == 'true'
+        run: |
+          TEMP_ZIP="worker_temp.zip"
+          
+          echo "正在下载文件: ${{ env.download_url }}"
+          # 使用 curl 下载 zip 文件
+          curl -L -o "$TEMP_ZIP" "${{ env.download_url }}"
+          
+          echo "正在解压文件..."
+          # 解压 zip 文件到当前目录，这将覆盖 _worker.js
+          unzip -o "$TEMP_ZIP"
+          
+          # 删除临时下载的 zip 文件
+          rm "$TEMP_ZIP"
+          
+          # 将最新标签名写入 version.txt
+          echo "${{ env.latest_tag }}" > version.txt
+
+      # 步骤 3: 提交更改 (使用专用的 Git Auto Commit Action 替代原生 git 命令)
+      # 优化：使用 Action 替代 4 行原生 shell 命令
+      - name: 提交更新到 GitHub
+        if: env.need_update == 'true'
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "🔄 Auto Sync Worker: Update to version ${{ env.latest_tag }}"
+          # 不使用 --force，因为我们只是在添加或修改 _worker.js 和 version.txt
