@@ -1,0 +1,4 @@
+# 文件: wrangler.toml
+name = "wk-auto-updater-zip"
+main = "_worker.js"
+compatibility_date = "2024-10-23"
